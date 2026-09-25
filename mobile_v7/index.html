@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1115" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Video call · WebRTC</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div>
+        <h1 id="tTitle">Video call</h1>
+        <p class="subtitle" id="tSubtitle">Open → copy link or ID → peer opens and calls</p>
+      </div>
+      <div class="lang-wrap">
+        <label id="langLabel" for="langSelect">Language</label>
+        <select id="langSelect" class="lang-select" aria-label="Language">
+          <option value="ru">RU</option>
+          <option value="ua">UA</option>
+          <option value="en" selected>EN</option>
+          <option value="de">DE</option>
+          <option value="el">EL</option>
+          <option value="fr">FR</option>
+        </select>
+      </div>
+    </header>
+
+    <div id="status" class="status" role="status">…</div>
+
+    <!-- Incoming call notification -->
+    <div class="incoming-call" id="incomingCall" hidden>
+      <div class="incoming-call-content">
+        <div class="incoming-call-icon">📞</div>
+        <div class="incoming-call-text">
+          <div class="incoming-call-title" id="incomingTitle">Incoming call...</div>
+          <div class="incoming-call-from" id="incomingFrom"></div>
+        </div>
+        <div class="incoming-call-actions">
+          <button type="button" class="btn btn-primary" id="acceptCallBtn">Accept</button>
+          <button type="button" class="btn btn-danger" id="rejectCallBtn">Reject</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="geo-row">
+      <span id="myGeo"></span>
+      <span id="peerGeo"></span>
+    </div>
+
+    <div class="card id-card">
+      <div class="id-row">
+        <span class="id-label" id="tYourId">Your ID:</span>
+        <code id="myId">…</code>
+        <button type="button" class="btn btn-secondary" id="copyIdBtn">Copy ID</button>
+      </div>
+      <div class="id-row">
+        <span class="id-label" id="tLink">Link:</span>
+        <code id="roomLink" class="room-link">—</code>
+        <button type="button" class="btn btn-secondary" id="copyLinkBtn">Copy link</button>
+      </div>
+      <div class="id-row call-row">
+        <input type="text" id="remoteId" placeholder="Peer ID" autocomplete="off" spellcheck="false" />
+        <button type="button" class="btn btn-primary" id="callBtn" disabled>Call</button>
+        <button type="button" class="btn btn-danger" id="hangupBtn" hidden>Hang up</button>
+      </div>
+    </div>
+
+    <div class="stage" id="stage">
+
+      <div class="stage-panel stage-video" id="panelVideo">
+        <div class="videos">
+          <div class="video-wrap" id="localWrap">
+            <video id="localVideo" playsinline autoplay muted></video>
+            <span class="video-label" id="localLabel">You</span>
+            <button type="button" class="btn-fs" data-fs="localWrap" title="Fullscreen">⛶</button>
+          </div>
+          <div class="video-wrap" id="remoteWrap">
+            <video id="remoteVideo" playsinline autoplay></video>
+            <span class="video-label" id="remoteLabel">Peer</span>
+            <button type="button" class="btn-fs" data-fs="remoteWrap" title="Fullscreen">⛶</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage-panel stage-chat" id="panelChat">
+        <div class="card chat-card chat-card-fs">
+          <div class="chat-header" id="tChat">Chat</div>
+          <div class="chat-log" id="chatLog" aria-live="polite"></div>
+
+          <!-- File transfer progress -->
+          <div class="file-progress" id="fileProgress" hidden>
+            <div class="file-info">
+              <span id="fileProgressName">Sending file...</span>
+              <span id="fileProgressSize">0 MB</span>
+            </div>
+            <progress id="fileProgressBar" max="100" value="0"></progress>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span id="fileProgressPercent">0%</span>
+              <button type="button" class="btn btn-sm btn-danger" id="fileCancelBtn">Cancel</button>
+            </div>
+          </div>
+
+          <div class="chat-input-row">
+            <input type="file" id="fileInput" style="display:none" />
+            <button type="button" class="btn btn-secondary" id="attachBtn" disabled title="Attach file">📎</button>
+            <input type="text" id="chatInput" maxlength="500" placeholder="Message…" autocomplete="off" disabled />
+            <button type="button" class="btn btn-primary" id="chatSendBtn" disabled>Send</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- стрелки -->
+      <button type="button" class="stage-nav stage-nav-left" id="stageToChat" title="Chat" aria-label="Chat">‹</button>
+      <button type="button" class="stage-nav stage-nav-right" id="stageToVideo" title="Video" aria-label="Video">›</button>
+
+    </div>
+
+    <div class="actions">
+      <button type="button" class="btn btn-secondary" id="muteBtn" disabled>Mic</button>
+      <button type="button" class="btn btn-secondary" id="camBtn" disabled>Camera</button>
+      <button type="button" class="btn btn-secondary" id="screenBtn" disabled>Screen</button>
+      <button type="button" class="btn btn-secondary" id="shotLocalBtn" disabled>Screenshot (me)</button>
+      <button type="button" class="btn btn-secondary" id="shotRemoteBtn" disabled>Screenshot (them)</button>
+      <button type="button" class="btn btn-secondary" id="remoteVideoBtn" disabled>Video on</button>
+      <button type="button" class="btn btn-secondary" id="blurBtn" disabled>Blur off</button>
+      <label class="id-label" id="tQuality" for="qualitySelect">Quality</label>
+      <select id="qualitySelect" class="lang-select" disabled>
+        <option value="high">High</option>
+        <option value="medium" selected>Medium</option>
+        <option value="low">Low</option>
+      </select>
+    </div>
+
+    <div class="card contacts-card">
+      <div class="chat-header" id="tContacts">Contacts</div>
+      <div class="contact-add">
+        <input type="text" id="contactName" placeholder="Name" maxlength="40" autocomplete="off" />
+        <input type="text" id="contactPeerId" placeholder="Peer ID" maxlength="64" autocomplete="off" spellcheck="false" />
+        <button type="button" class="btn btn-primary" id="contactAddBtn">+</button>
+      </div>
+      <ul class="contact-list" id="contactList"></ul>
+    </div>
+
+    <p class="hint" id="tHint">Quality — outgoing video. Blur — your camera. Swipe left for chat, right for video. Contacts: name + Peer ID.</p>
+  </div>
+
+  <script src="locales.js" defer></script>
+  <script src="app.js" defer></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js").catch(function () {});
+    }
+  </script>
+</body>
+</html>
