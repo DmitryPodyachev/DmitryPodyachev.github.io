@@ -4,9 +4,17 @@
   const SUPPORTED = Object.keys(I18N);
   const $ = (id) => document.getElementById(id);
   const CONTACTS_KEY = "vc_contacts";
+  const CHAT_HISTORY_KEY = "vc_chat_history";
   const CHUNK_SIZE = 16384;           // 16KB - safe for WebRTC Data Channel
   const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB limit
   const CHUNK_DELAY_MS = 10;          // Throttle to avoid overwhelming
+
+  const SCREEN_QUALITY = {
+    ultra: { w: 1920, h: 1080, fps: 30, bitrate: 5000000 },
+    high: { w: 1280, h: 720, fps: 30, bitrate: 2500000 },
+    medium: { w: 960, h: 540, fps: 24, bitrate: 1500000 },
+    low: { w: 640, h: 360, fps: 15, bitrate: 800000 }
+  };
 
   let lang = "en", t = I18N.en;
   let peer, cameraStream, localStream, currentCall, dataConn;
@@ -14,12 +22,17 @@
   let remoteVideoVisible = true;
   let qualityLevel = localStorage.getItem("vc_quality") || "medium";
   if (!QUALITY[qualityLevel]) qualityLevel = "medium";
+  let screenQualityLevel = localStorage.getItem("vc_screenQuality") || "medium";
+  if (!SCREEN_QUALITY[screenQualityLevel] && screenQualityLevel !== "auto") screenQualityLevel = "medium";
+  let autoScreenQuality = screenQualityLevel === "auto";
   let blurEnabled = false, blurCanvas, blurCtx, blurRAF, blurTrack, blurVideoElement = null;
   let myGeo = null, peerGeo = null;
   let currentUpload = null;           // { fileId, name, total, sent }
   const incomingFiles = new Map();    // fileId -> { meta, chunks[], received }
   let ringtoneStop = null;            // Function to stop ringtone
   let pendingCall = null;             // Pending incoming call
+  let connectionStats = { rtt: 0, packetsLost: 0, jitter: 0, lastUpdate: 0 };
+  let screenTrackForceSync = false;
 
   const el = {
     status: $("status"), myId: $("myId"), roomLink: $("roomLink"), remoteId: $("remoteId"),
@@ -27,10 +40,11 @@
     muteBtn: $("muteBtn"), camBtn: $("camBtn"), screenBtn: $("screenBtn"),
     shotLocalBtn: $("shotLocalBtn"), shotRemoteBtn: $("shotRemoteBtn"),
     remoteVideoBtn: $("remoteVideoBtn"), qualitySelect: $("qualitySelect"), blurBtn: $("blurBtn"),
+    screenQualitySelect: $("screenQualitySelect"), syncScreenBtn: $("syncScreenBtn"), connectionStatus: $("connectionStatus"),
     localVideo: $("localVideo"), remoteVideo: $("remoteVideo"),
     localLabel: $("localLabel"), remoteLabel: $("remoteLabel"),
     langSelect: $("langSelect"), myGeo: $("myGeo"), peerGeo: $("peerGeo"),
-    chatLog: $("chatLog"), chatInput: $("chatInput"), chatSendBtn: $("chatSendBtn"),
+    chatLog: $("chatLog"), chatInput: $("chatInput"), chatSendBtn: $("chatSendBtn"), exportChatBtn: $("exportChatBtn"),
     contactName: $("contactName"), contactPeerId: $("contactPeerId"),
     contactAddBtn: $("contactAddBtn"), contactList: $("contactList"), stage: $("stage"),
     fileInput: $("fileInput"), attachBtn: $("attachBtn"),
@@ -96,7 +110,7 @@
     const set = (id, val) => { const n = $(id); if (n) n.textContent = val; };
     set("tTitle", t.title); set("tSubtitle", t.subtitle); set("tYourId", t.yourId);
     set("tLink", t.link); set("langLabel", t.lang); set("tChat", t.chat); set("tHint", t.hint);
-    set("tQuality", t.quality); set("tContacts", t.contacts);
+    set("tQuality", t.quality); set("tScreenQuality", t.screenQuality || "Screen"); set("tContacts", t.contacts);
     if (el.copyIdBtn) el.copyIdBtn.textContent = t.copyId;
     if (el.copyLinkBtn) el.copyLinkBtn.textContent = t.copyLink;
     if (el.remoteId) el.remoteId.placeholder = t.remotePlaceholder;
@@ -114,6 +128,7 @@
     if (el.chatInput) el.chatInput.placeholder = t.chatPlaceholder;
     if (el.chatSendBtn) el.chatSendBtn.textContent = t.send;
     if (el.attachBtn) el.attachBtn.title = t.attachFile;
+    if (el.syncScreenBtn) el.syncScreenBtn.title = t.syncScreen || "Force screen sync";
     if (el.acceptCallBtn) el.acceptCallBtn.textContent = t.accept;
     if (el.rejectCallBtn) el.rejectCallBtn.textContent = t.reject;
     if (el.incomingTitle) el.incomingTitle.textContent = t.incomingCallTitle;
@@ -154,6 +169,66 @@
       params.encodings[0].maxFramerate = q.fps;
       await sender.setParameters(params);
     } catch (e) { console.warn(e); }
+  }
+  function getScreenQuality() {
+    if (autoScreenQuality) {
+      const rtt = connectionStats.rtt || 0;
+      const packetsLost = connectionStats.packetsLost || 0;
+      if (rtt > 300 || packetsLost > 5) return SCREEN_QUALITY.low;
+      if (rtt > 150 || packetsLost > 2) return SCREEN_QUALITY.medium;
+      if (rtt > 80) return SCREEN_QUALITY.high;
+      return SCREEN_QUALITY.ultra;
+    }
+    return SCREEN_QUALITY[screenQualityLevel] || SCREEN_QUALITY.medium;
+  }
+  async function applyScreenBitrate(bitrate, fps) {
+    if (!currentCall || !currentCall.peerConnection || !isScreenSharing) return;
+    const sender = currentCall.peerConnection.getSenders().find((s) => s.track && s.track.kind === "video");
+    if (!sender) return;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      params.encodings[0].maxBitrate = bitrate;
+      params.encodings[0].maxFramerate = fps;
+      await sender.setParameters(params);
+    } catch (e) { console.warn(e); }
+  }
+  async function updateConnectionStats() {
+    if (!currentCall || !currentCall.peerConnection) return;
+    try {
+      const stats = await currentCall.peerConnection.getStats();
+      let candidatePair = null;
+      stats.forEach(report => {
+        if (report.type === "candidate-pair" && report.state === "succeeded") {
+          candidatePair = report;
+        }
+      });
+      if (candidatePair) {
+        connectionStats.rtt = Math.round(candidatePair.currentRoundTripTime * 1000);
+        connectionStats.packetsLost = candidatePair.packetsLost || 0;
+        connectionStats.jitter = Math.round(candidatePair.jitter * 1000);
+        connectionStats.lastUpdate = Date.now();
+        updateConnectionIndicator();
+        if (autoScreenQuality && isScreenSharing) {
+          const prevQuality = screenQualityLevel;
+          const q = getScreenQuality();
+          const currentQ = SCREEN_QUALITY[screenQualityLevel];
+          if (currentQ && (q.bitrate !== currentQ.bitrate || q.fps !== currentQ.fps)) {
+            await applyScreenBitrate(q.bitrate, q.fps);
+          }
+        }
+      }
+    } catch (e) { console.warn("Stats error:", e); }
+  }
+  function updateConnectionIndicator() {
+    if (!el.connectionStatus) return;
+    const rtt = connectionStats.rtt;
+    if (rtt === 0) return;
+    el.connectionStatus.className = "connection-status";
+    if (rtt < 80) el.connectionStatus.classList.add("good");
+    else if (rtt < 150) el.connectionStatus.classList.add("fair");
+    else el.connectionStatus.classList.add("poor");
+    el.connectionStatus.title = `RTT: ${rtt}ms, Packets lost: ${connectionStats.packetsLost}`;
   }
   async function setQuality(level) {
     if (!QUALITY[level]) return;
@@ -255,10 +330,62 @@
     if (el.chatInput) el.chatInput.disabled = !on;
     if (el.chatSendBtn) el.chatSendBtn.disabled = !on;
     if (el.attachBtn) el.attachBtn.disabled = !on;
+    if (el.exportChatBtn) el.exportChatBtn.disabled = !on;
   }
   function escapeHtml(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   } // /"
+  function saveChatHistory() {
+    if (!el.chatLog) return;
+    const messages = [];
+    el.chatLog.querySelectorAll(".chat-msg").forEach(function (msg) {
+      const who = msg.querySelector(".who");
+      const time = msg.querySelector(".time");
+      const text = msg.textContent.replace((who ? who.textContent : "") + (time ? time.textContent : ""), "").trim();
+      if (who && time && text) {
+        messages.push({
+          from: who.textContent.includes("Вы") || who.textContent.includes("You") ? "me" : "peer",
+          text: text,
+          time: time.textContent
+        });
+      }
+    });
+    if (messages.length > 0) {
+      const history = JSON.stringify(messages);
+      localStorage.setItem(CHAT_HISTORY_KEY, history);
+    }
+  }
+  function getChatHistory() {
+    try { return JSON.parse(localStorage.getItem(CHAT_HISTORY_KEY) || "[]"); } catch (_) { return []; }
+  }
+  function exportChatAsFile(format) {
+    if (!el.chatLog) return;
+    const messages = getChatHistory();
+    let content = "";
+    if (format === "txt") {
+      content = messages.map(m => `[${m.time}] ${m.from === "me" ? t.chatYou : t.chatPeer}: ${m.text}`).join("\n");
+    } else if (format === "json") {
+      content = JSON.stringify(messages, null, 2);
+    } else if (format === "csv") {
+      content = "Time,From,Message\n";
+      messages.forEach(m => {
+        const from = m.from === "me" ? t.chatYou : t.chatPeer;
+        const text = m.text.replace(/"/g, '""');
+        content += `"${m.time}","${from}","${text}"\n`;
+      });
+    }
+    if (content) {
+      const blob = new Blob([content], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "chat_" + new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19) + "." + format;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+    }
+  }
   function appendChat(text, fromMe) {
     if (!el.chatLog || !text) return;
     const div = document.createElement("div");
@@ -267,6 +394,7 @@
     div.innerHTML = '<span class="who">' + (fromMe ? t.chatYou : t.chatPeer) + "</span>" + escapeHtml(text) + '<span class="time">' + time + "</span>";
     el.chatLog.appendChild(div);
     el.chatLog.scrollTop = el.chatLog.scrollHeight;
+    saveChatHistory();
   }
   function sendChat() {
     const text = ((el.chatInput && el.chatInput.value) || "").trim();
@@ -579,6 +707,7 @@
     el.callBtn.disabled = true;
     setStatus(t.connectingCall, "");
     openDataTo(call.peer);
+    const statsInterval = setInterval(updateConnectionStats, 2000);
 
     call.on("stream", function (rs) {
       el.remoteVideo.srcObject = rs;
@@ -591,8 +720,8 @@
       applySenderBitrate();
       offerSavePeer(call.peer);   // ← сохранить контакт
     });
-    call.on("close", endCall);
-    call.on("error", function (err) { setStatus(t.callErr + err, "err"); endCall(); });
+    call.on("close", function () { clearInterval(statsInterval); endCall(); });
+    call.on("error", function (err) { clearInterval(statsInterval); setStatus(t.callErr + err, "err"); endCall(); });
   }
   async function startPeer() {
     el.myId.textContent = t.connecting;
@@ -768,13 +897,19 @@
       isScreenSharing = true;
       el.screenBtn.textContent = t.screenStop;
       el.screenBtn.classList.add("btn-active");
+      if (el.screenQualitySelect) el.screenQualitySelect.disabled = false;
+      if (el.syncScreenBtn) el.syncScreenBtn.disabled = false;
       if (el.blurBtn) el.blurBtn.disabled = true;
       replaceTrackInCall(screenTrack);
+      const q = getScreenQuality();
+      await applyScreenBitrate(q.bitrate, q.fps);
       screenTrack.onended = function () {
         if (!isScreenSharing) return;
         isScreenSharing = false;
         el.screenBtn.textContent = t.screen;
         el.screenBtn.classList.remove("btn-active");
+        if (el.screenQualitySelect) el.screenQualitySelect.disabled = true;
+        if (el.syncScreenBtn) el.syncScreenBtn.disabled = true;
         if (el.blurBtn) el.blurBtn.disabled = false;
         localStream = cameraStream;
         el.localVideo.srcObject = localStream;
@@ -818,11 +953,44 @@
     });
   }
   if (el.qualitySelect) el.qualitySelect.addEventListener("change", function () { setQuality(el.qualitySelect.value); });
+  if (el.screenQualitySelect) {
+    el.screenQualitySelect.addEventListener("change", function () {
+      const val = el.screenQualitySelect.value;
+      autoScreenQuality = (val === "auto");
+      if (!autoScreenQuality) {
+        screenQualityLevel = val;
+        localStorage.setItem("vc_screenQuality", val);
+        if (isScreenSharing) {
+          const q = getScreenQuality();
+          applyScreenBitrate(q.bitrate, q.fps).catch(console.warn);
+        }
+      } else {
+        localStorage.setItem("vc_screenQuality", "auto");
+      }
+    });
+  }
+  if (el.syncScreenBtn) {
+    el.syncScreenBtn.addEventListener("click", function () {
+      if (!isScreenSharing) return;
+      screenTrackForceSync = true;
+      const q = getScreenQuality();
+      applyScreenBitrate(q.bitrate, q.fps).catch(console.warn);
+      setStatus("Screen sync forced", "ok");
+      setTimeout(() => { screenTrackForceSync = false; }, 1000);
+    });
+  }
   if (el.blurBtn) el.blurBtn.addEventListener("click", function () { setBlur(!blurEnabled); });
   if (el.chatSendBtn) el.chatSendBtn.addEventListener("click", sendChat);
   if (el.chatInput) {
     el.chatInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+    });
+  }
+  if (el.exportChatBtn) {
+    el.exportChatBtn.addEventListener("click", function () {
+      const format = confirm("Export as JSON? (OK=JSON, Cancel=TXT)") ? "json" : "txt";
+      exportChatAsFile(format);
+      setStatus(t.chatExported || "Chat exported", "ok");
     });
   }
   if (el.attachBtn) el.attachBtn.addEventListener("click", function () {
