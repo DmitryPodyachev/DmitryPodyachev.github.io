@@ -314,23 +314,62 @@
     const vt = localStream.getVideoTracks()[0];
     if (vt) { vt.enabled = videoEnabled; replaceTrackInCall(vt); }
   }
-  async function initCamera() {
+  // Нет камеры/микрофона (запрет, webview, нет устройства) – всё равно даём звонить:
+  // недостающие дорожки заменяем заглушками (картинка «камера выкл.», тишина), чат и показ экрана работают.
+  let mediaNote = "";
+  let placeholderTimer = null;
+  function placeholderVideoTrack() {
+    const c = document.createElement("canvas"); c.width = 640; c.height = 360;
+    const ctx = c.getContext("2d");
+    const draw = function () {
+      ctx.fillStyle = "#1f2430"; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.fillStyle = "#8a93a6"; ctx.font = "64px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("📷✕", c.width / 2, c.height / 2);
+    };
+    draw();
+    if (placeholderTimer) clearInterval(placeholderTimer);
+    placeholderTimer = setInterval(draw, 1000);          // иначе статичный canvas не шлёт кадры
+    return c.captureStream(1).getVideoTracks()[0];
+  }
+  function silentAudioTrack() {
     try {
-      const q = getQuality();
-      cameraStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: q.w }, height: { ideal: q.h }, frameRate: { ideal: q.fps, max: q.fps } },
-        audio: true
-      });
-      localStream = blurEnabled ? startBlurFrom(cameraStream) : cameraStream;
-      el.localVideo.srcObject = localStream;
-      el.muteBtn.disabled = el.camBtn.disabled = el.screenBtn.disabled = el.shotLocalBtn.disabled = false;
-      if (el.blurBtn) el.blurBtn.disabled = false;
-      if (el.qualitySelect) el.qualitySelect.disabled = false;
-      return true;
-    } catch (err) {
-      setStatus(t.noMedia + err.message, "err");
-      return false;
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      return ac.createMediaStreamDestination().stream.getAudioTracks()[0];
+    } catch (_) { return null; }
+  }
+  async function tryMedia(c) {
+    try { return await navigator.mediaDevices.getUserMedia(c); } catch (e) { return e; }
+  }
+  async function initCamera() {
+    const q = getQuality();
+    const vc = { facingMode: "user", width: { ideal: q.w }, height: { ideal: q.h }, frameRate: { ideal: q.fps, max: q.fps } };
+    let got = null, firstErr = null;
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      for (const c of [{ video: vc, audio: true }, { audio: true }, { video: vc }]) {
+        const r = await tryMedia(c);
+        if (r instanceof MediaStream) { got = r; break; }
+        if (!firstErr) firstErr = r;
+      }
+    } else {
+      firstErr = new Error("getUserMedia unavailable");
     }
+    cameraStream = got || new MediaStream();
+    const hasVideo = cameraStream.getVideoTracks().length > 0, hasAudio = cameraStream.getAudioTracks().length > 0;
+    if (!hasVideo) { const v = placeholderVideoTrack(); if (v) cameraStream.addTrack(v); }
+    if (!hasAudio) { const a = silentAudioTrack(); if (a) cameraStream.addTrack(a); }
+    mediaNote = (!hasVideo || !hasAudio)
+      ? (t.noMedia + (firstErr && firstErr.message ? firstErr.message : "") + " – " + (t.noMediaFallback || "call still possible: chat and screen sharing work."))
+      : "";
+    if (!hasVideo) blurEnabled = false;
+    localStream = blurEnabled ? startBlurFrom(cameraStream) : cameraStream;
+    el.localVideo.srcObject = localStream;
+    el.screenBtn.disabled = false;
+    el.muteBtn.disabled = !hasAudio;
+    el.camBtn.disabled = el.shotLocalBtn.disabled = !hasVideo;
+    if (el.blurBtn) el.blurBtn.disabled = !hasVideo;
+    if (el.qualitySelect) el.qualitySelect.disabled = !hasVideo;
+    if (mediaNote) setStatus(mediaNote, "err");
+    return true;
   }
   function replaceTrackInCall(track) {
     if (!currentCall || !currentCall.peerConnection || !track) return;
@@ -771,7 +810,7 @@
         setStatus(t.idFromLink, "ok");
         el.callBtn.click();                              // гость звонит хосту сразу
       } else {
-        setStatus(t.ready, "ok");
+        setStatus(mediaNote ? t.ready + " · " + mediaNote : t.ready, mediaNote ? "err" : "ok");
       }
     });
     peer.on("call", function (call) {
