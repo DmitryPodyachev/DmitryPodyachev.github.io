@@ -641,19 +641,18 @@
     pendingCall = null;
   }
   function acceptCall() {
-    if (!pendingCall) return;
-    hideIncomingCall();
-    pendingCall.answer(localStream);
-    attachCall(pendingCall);
+    const call = pendingCall;
+    if (!call) return;
+    hideIncomingCall();          // обнуляет pendingCall – поэтому берём ссылку заранее
+    call.answer(localStream);
+    attachCall(call);
     setStatus(t.connected, "ok");
   }
   function rejectCall() {
-    if (!pendingCall) {
-      hideIncomingCall();
-      return;
-    }
+    const call = pendingCall;
     hideIncomingCall();
-    try { pendingCall.close(); } catch (_) {}
+    if (!call) return;
+    try { call.close(); } catch (_) {}
     setStatus(t.callRejected, "ok");
   }
   function setupDataConn(conn) {
@@ -710,7 +709,7 @@
     const statsInterval = setInterval(updateConnectionStats, 2000);
 
     call.on("stream", function (rs) {
-      el.remoteVideo.srcObject = rs;
+      if (el.remoteVideo.srcObject !== rs) el.remoteVideo.srcObject = rs;   // stream приходит дважды (audio+video)
       rs.getVideoTracks().forEach(function (tr) { tr.enabled = remoteVideoVisible; });
       if (el.remoteVideo.paused) el.remoteVideo.play().catch(function (e) { console.warn("Remote video play failed:", e); });
       el.shotRemoteBtn.disabled = false;
