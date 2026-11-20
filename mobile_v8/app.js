@@ -58,8 +58,19 @@
     el.status.textContent = text;
     el.status.className = "status" + (type ? " " + type : "");
   }
+  // Короткие ID: на сервере PeerJS – "vc8-<код>", пользователю показываем только код.
+  const ID_PREFIX = "vc8-";
+  const CODE_ABC = "abcdefghjkmnpqrstuvwxyz23456789";      // без 0/o/1/l/i
+  function newCode() {
+    const a = new Uint32Array(6); crypto.getRandomValues(a);
+    return Array.from(a, function (x) { return CODE_ABC[x % CODE_ABC.length]; }).join("");
+  }
+  function isCode(v) { return /^[a-z0-9]{3,16}$/i.test(v || ""); }
+  function toPeerId(v) { v = String(v || "").trim(); return isCode(v) ? ID_PREFIX + v.toLowerCase() : v; }
+  function fromPeerId(id) { return id && id.indexOf(ID_PREFIX) === 0 ? id.slice(ID_PREFIX.length) : (id || ""); }
+  let roomCode = null;                                    // комната (код хоста) для ссылки
   function updateRoomLink(id) {
-    el.roomLink.textContent = location.origin + location.pathname + "?call=" + encodeURIComponent(id);
+    el.roomLink.textContent = location.origin + location.pathname + "?room=" + encodeURIComponent(fromPeerId(id));
   }
   function flagEmoji(code) {
     if (!code || code.length !== 2) return "";
@@ -722,26 +733,45 @@
     call.on("close", function () { clearInterval(statsInterval); endCall(); });
     call.on("error", function (err) { clearInterval(statsInterval); setStatus(t.callErr + err, "err"); endCall(); });
   }
+  function makePeer(id) {
+    const opts = { debug: 1, config: { iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" }
+    ] } };
+    return id ? new Peer(id, opts) : new Peer(opts);
+  }
+  // Ссылка ?room=<код>: кто первый занял код – хост (ждёт звонка), второй – гость и звонит хосту сам.
+  // Без ссылки: свой постоянный код (localStorage) и он же в URL, чтобы перезагрузка не меняла ID.
   async function startPeer() {
     el.myId.textContent = t.connecting;
     setStatus(t.init, "");
     if (!(await initCamera())) return;
-    peer = new Peer({
-      debug: 1,
-      config: { iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" }
-      ] }
-    });
+    const qs = new URLSearchParams(location.search);
+    const fromUrl = (qs.get("room") || qs.get("call") || "").trim();
+    let wantHost, callTo = null;
+    if (fromUrl && !isCode(fromUrl)) {                    // старая ссылка с длинным UUID
+      wantHost = null; callTo = fromUrl;
+    } else {
+      roomCode = (fromUrl || localStorage.getItem("vc_myCode") || newCode()).toLowerCase();
+      if (!fromUrl) localStorage.setItem("vc_myCode", roomCode);
+      wantHost = toPeerId(roomCode);
+      if (!fromUrl || qs.get("call")) history.replaceState(null, "", location.pathname + "?room=" + roomCode + location.hash);
+    }
+    connectPeer(wantHost, callTo, 0);
+  }
+  function connectPeer(wantId, callTo, attempt) {
+    peer = makePeer(wantId);
     peer.on("open", function (id) {
-      el.myId.textContent = id;
-      updateRoomLink(id);
+      el.myId.textContent = fromPeerId(id);
+      if (!callTo) sessionStorage.setItem("vc_host", id);
+      updateRoomLink(roomCode ? toPeerId(roomCode) : id);
       el.callBtn.disabled = false;
-      setStatus(t.ready, "ok");
-      const join = new URLSearchParams(location.search).get("call");
-      if (join && join !== id) {
-        el.remoteId.value = join;
+      if (callTo) {
+        el.remoteId.value = fromPeerId(callTo);
         setStatus(t.idFromLink, "ok");
+        el.callBtn.click();                              // гость звонит хосту сразу
+      } else {
+        setStatus(t.ready, "ok");
       }
     });
     peer.on("call", function (call) {
@@ -749,7 +779,21 @@
       showIncomingCall(call);
     });
     peer.on("connection", setupDataConn);
-    peer.on("error", function (err) { setStatus(t.peerErr + (err.type || err.message || err), "err"); });
+    peer.on("error", function (err) {
+      if (err && err.type === "unavailable-id" && wantId) {
+        try { peer.destroy(); } catch (_) {}
+        if (callTo) return connectPeer(null, callTo, 0);  // свой код занят (другая вкладка) – гость со случайным ID
+        // После перезагрузки сервер ещё пару секунд держит старое соединение – сначала пробуем снова,
+        // потом считаем, что хост уже есть, и заходим гостем под своим постоянным кодом.
+        const wasHost = sessionStorage.getItem("vc_host") === wantId;   // только своя перезагрузка
+        if (wasHost && attempt < 4) { setTimeout(function () { connectPeer(wantId, callTo, attempt + 1); }, 2000); return; }
+        let mine = localStorage.getItem("vc_myCode");
+        if (!mine) { mine = newCode(); localStorage.setItem("vc_myCode", mine); }
+        const guestId = toPeerId(mine) === wantId ? null : toPeerId(mine);
+        return connectPeer(guestId, wantId, 0);
+      }
+      setStatus(t.peerErr + (err.type || err.message || err), "err");
+    });
     peer.on("disconnected", function () { setStatus(t.disconnected, "err"); });
   }
 
@@ -763,10 +807,10 @@
     loadContacts().forEach(function (c, i) {
       const li = document.createElement("li");
       const name = document.createElement("span"); name.className = "name"; name.textContent = c.name;
-      const pid = document.createElement("span"); pid.className = "pid"; pid.textContent = c.peerId;
+      const pid = document.createElement("span"); pid.className = "pid"; pid.textContent = fromPeerId(c.peerId);
       const callB = document.createElement("button"); callB.type = "button"; callB.className = "btn btn-primary"; callB.textContent = "\u260E";
       callB.addEventListener("click", function () {
-        if (el.remoteId) el.remoteId.value = c.peerId;
+        if (el.remoteId) el.remoteId.value = fromPeerId(c.peerId);
         if (el.callBtn && !el.callBtn.disabled) el.callBtn.click();
       });
       const delB = document.createElement("button"); delB.type = "button"; delB.className = "btn btn-secondary"; delB.textContent = "\u00D7";
@@ -781,7 +825,7 @@
   function offerSavePeer(peerId) {
     if (!peerId) return;
     if (loadContacts().some(function (c) { return c.peerId === peerId; })) return;
-    var name = window.prompt((t.peer || "Peer") + " — " + (t.contactName || "name") + "?", peerId.slice(0, 8));
+    var name = window.prompt((t.peer || "Peer") + " — " + (t.contactName || "name") + "?", fromPeerId(peerId).slice(0, 8));
     if (!name || !name.trim()) return;
     var list = loadContacts();
     list.push({ name: name.trim(), peerId: peerId });
@@ -792,7 +836,7 @@
   if (el.contactAddBtn) {
     el.contactAddBtn.addEventListener("click", function () {
       const name = ((el.contactName && el.contactName.value) || "").trim();
-      const peerId = ((el.contactPeerId && el.contactPeerId.value) || "").trim();
+      const peerId = toPeerId((el.contactPeerId && el.contactPeerId.value) || "");
       if (!name || !peerId) return;
       const list = loadContacts();
       if (list.some(function (c) { return c.peerId === peerId; })) return;
@@ -830,10 +874,10 @@
   })();
 
   el.callBtn.addEventListener("click", function () {
-    const remoteId = el.remoteId.value.trim();
+    const remoteId = toPeerId(el.remoteId.value);
     if (!remoteId) return setStatus(t.enterId, "err");
     if (!localStream) return setStatus(t.noStream, "err");
-    if (remoteId === el.myId.textContent) return setStatus(t.selfCall, "err");
+    if (peer && remoteId === peer.id) return setStatus(t.selfCall, "err");
     const call = peer.call(remoteId, localStream);
     if (!call) return setStatus(t.callFail, "err");
     attachCall(call);
