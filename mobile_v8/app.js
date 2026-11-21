@@ -316,7 +316,17 @@
   }
   // Нет камеры/микрофона (запрет, webview, нет устройства) – всё равно даём звонить:
   // недостающие дорожки заменяем заглушками (картинка «камера выкл.», тишина), чат и показ экрана работают.
-  let mediaNote = "";
+  let mediaNote = "", mediaInfo = "";
+  const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }];
+  const D = window.VCDiag || { init: function () {}, set: function () {}, event: function () {}, ping: function () {}, watchCall: function () {} };
+  function diagState() {
+    const id = peer && peer.open ? peer.id : "";
+    return {
+      code: fromPeerId(id), room: roomCode || "", role: id && roomCode && id === toPeerId(roomCode) ? "host" : (id ? "guest" : ""),
+      state: currentCall ? "incall" : (id ? "idle" : "offline"), peerWith: currentCall ? fromPeerId(currentCall.peer) : "",
+      lang: lang, media: mediaInfo
+    };
+  }
   let placeholderTimer = null;
   function placeholderVideoTrack() {
     const c = document.createElement("canvas"); c.width = 640; c.height = 360;
@@ -360,6 +370,9 @@
     mediaNote = (!hasVideo || !hasAudio)
       ? (t.noMedia + (firstErr && firstErr.message ? firstErr.message : "") + " – " + (t.noMediaFallback || "call still possible: chat and screen sharing work."))
       : "";
+    mediaInfo = hasVideo && hasAudio ? "video+audio" : hasVideo ? "video only" : hasAudio ? "audio only" : "none";
+    D.set("media", hasVideo && hasAudio ? "ok" : (hasVideo || hasAudio ? "warn" : "fail"),
+      mediaInfo + (firstErr && (!hasVideo || !hasAudio) ? " – " + (firstErr.name || "") + ": " + (firstErr.message || "") : ""));
     if (!hasVideo) blurEnabled = false;
     localStream = blurEnabled ? startBlurFrom(cameraStream) : cameraStream;
     el.localVideo.srcObject = localStream;
@@ -749,6 +762,7 @@
     setChatEnabled(false);
     if (el.chatLog) el.chatLog.innerHTML = "";
     setStatus(t.callEnded, "ok");
+    setTimeout(D.ping, 0);
   }
   function attachCall(call) {
     currentCall = call;
@@ -757,6 +771,8 @@
     setStatus(t.connectingCall, "");
     openDataTo(call.peer);
     const statsInterval = setInterval(updateConnectionStats, 2000);
+    D.watchCall(call, function (msg) { setStatus(msg, "err"); });
+    D.ping();
 
     call.on("stream", function (rs) {
       if (el.remoteVideo.srcObject !== rs) el.remoteVideo.srcObject = rs;   // stream приходит дважды (audio+video)
@@ -773,10 +789,7 @@
     call.on("error", function (err) { clearInterval(statsInterval); setStatus(t.callErr + err, "err"); endCall(); });
   }
   function makePeer(id) {
-    const opts = { debug: 1, config: { iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" }
-    ] } };
+    const opts = { debug: 1, config: { iceServers: ICE_SERVERS } };
     return id ? new Peer(id, opts) : new Peer(opts);
   }
   // Ссылка ?room=<код>: кто первый занял код – хост (ждёт звонка), второй – гость и звонит хосту сам.
@@ -785,6 +798,12 @@
     el.myId.textContent = t.connecting;
     setStatus(t.init, "");
     if (!(await initCamera())) return;
+    if (typeof window.Peer !== "function") {
+      const m = (window.VCDiag ? window.VCDiag.TX : null);
+      setStatus("PeerJS: " + ((m && (m[lang] || m.en).libFail) || "library not loaded"), "err");
+      el.myId.textContent = "—";
+      return;
+    }
     const qs = new URLSearchParams(location.search);
     const fromUrl = (qs.get("room") || qs.get("call") || "").trim();
     let wantHost, callTo = null;
@@ -800,7 +819,13 @@
   }
   function connectPeer(wantId, callTo, attempt) {
     peer = makePeer(wantId);
+    const sigTimer = setTimeout(function () {
+      if (!peer.open) D.set("signal", "fail", "timeout 15 s – 0.peerjs.com");
+    }, 15000);
     peer.on("open", function (id) {
+      clearTimeout(sigTimer);
+      D.set("signal", "ok", "0.peerjs.com");
+      D.ping();
       el.myId.textContent = fromPeerId(id);
       if (!callTo) sessionStorage.setItem("vc_host", id);
       updateRoomLink(roomCode ? toPeerId(roomCode) : id);
@@ -832,6 +857,8 @@
         return connectPeer(guestId, wantId, 0);
       }
       setStatus(t.peerErr + (err.type || err.message || err), "err");
+      if (err && /network|server-error|socket-error|socket-closed|browser-incompatible/.test(err.type || "")) D.set("signal", "fail", (err.type || "") + ": " + (err.message || ""));
+      else D.event("peer-error", (err && (err.type + ": " + err.message)) || String(err));
     });
     peer.on("disconnected", function () { setStatus(t.disconnected, "err"); });
   }
@@ -1225,6 +1252,7 @@
     if (el.blurBtn) el.blurBtn.disabled = true;
     myGeo = await detectCountry();
     renderGeo();
+    D.init(diagState, ICE_SERVERS);
     startPeer();
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);

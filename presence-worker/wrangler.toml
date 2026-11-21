@@ -1,0 +1,15 @@
+name = "vcall-presence"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+routes = [{ pattern = "vc.goldberg.pp.ua", custom_domain = true }]
+
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "Hub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Hub"]
+
+# secret ADMIN_USERS: "login:pass" per line (wrangler secret put ADMIN_USERS)

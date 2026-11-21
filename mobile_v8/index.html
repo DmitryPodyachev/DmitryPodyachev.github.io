@@ -152,6 +152,7 @@
       </select>
       <button type="button" class="btn btn-secondary" id="syncScreenBtn" disabled title="Force screen sync">↻ Sync</button>
       <span id="connectionStatus" class="connection-status" title="Connection quality"></span>
+      <button type="button" class="btn btn-secondary" id="diagBtn" title="Diagnostics">🩺</button>
     </div>
 
     <div class="card contacts-card">
@@ -168,6 +169,7 @@
   </div>
 
   <script src="locales.js" defer></script>
+  <script src="diag.js" defer></script>
   <script src="app.js" defer></script>
   <script>
     if ("serviceWorker" in navigator) {

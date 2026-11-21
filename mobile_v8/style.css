@@ -840,3 +840,13 @@ body.fs-fake-open { overflow: hidden; }
 }
 .zoom-bar .zoom-val { color: #fff; font-size: 0.8rem; min-width: 44px; text-align: center; }
 .video-wrap .btn-fs, .video-wrap .video-label { z-index: 2; }
+
+/* Diagnostics dialog */
+.diag-dialog { max-width: 520px; width: calc(100% - 32px); background: #1a1f27; color: #e8ecf2; border: 1px solid #2a313c; border-radius: 12px; padding: 16px; }
+.diag-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+.diag-dialog h3 { margin: 0 0 8px; }
+.diag-dialog ul { list-style: none; padding: 0; margin: 0 0 8px; }
+.diag-dialog li { padding: 6px 0; border-bottom: 1px solid #2a313c; font-size: 0.9rem; }
+.diag-dialog li span { color: #a9b2c3; }
+.diag-hint { font-size: 0.8rem; color: #a9b2c3; }
+.diag-actions { text-align: right; }
