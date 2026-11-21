@@ -795,3 +795,48 @@ body {
   line-height: 1;
   padding: 8px 10px;
 }
+
+/* Zoom / pan in fullscreen */
+.video-wrap video { transform-origin: 0 0; }
+.video-wrap.zoom-on { touch-action: none; }
+.video-wrap.zoom-on video { will-change: transform; }
+.video-wrap.zoomed { cursor: grab; }
+.video-wrap.zoomed:active { cursor: grabbing; }
+.video-wrap.fs-fake {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  aspect-ratio: auto;
+  border-radius: 0;
+  border: 0;
+}
+.video-wrap.fs-fake video { object-fit: contain; }
+body.fs-fake-open { overflow: hidden; }
+.zoom-bar {
+  display: none;
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  gap: 4px;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 8px;
+  padding: 3px;
+  z-index: 2;
+}
+.video-wrap.zoom-on .zoom-bar { display: flex; }
+.zoom-bar button {
+  min-width: 36px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.zoom-bar .zoom-val { color: #fff; font-size: 0.8rem; min-width: 44px; text-align: center; }
+.video-wrap .btn-fs, .video-wrap .video-label { z-index: 2; }

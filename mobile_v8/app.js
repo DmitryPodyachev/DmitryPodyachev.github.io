@@ -902,6 +902,7 @@
       x0 = e.changedTouches[0].clientX; y0 = e.changedTouches[0].clientY;
     }, { passive: true });
     el.stage.addEventListener("touchend", function (e) {
+      if (document.querySelector(".video-wrap.zoom-on")) return;   // в полноэкранном режиме жесты = зум/сдвиг
       var dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
       if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy)) return;
       if (dx < 0) showChatPanel(true); else showChatPanel(false);
@@ -1082,13 +1083,132 @@
   if (el.fileCancelBtn) el.fileCancelBtn.addEventListener("click", cancelFileTransfer);
   if (el.acceptCallBtn) el.acceptCallBtn.addEventListener("click", acceptCall);
   if (el.rejectCallBtn) el.rejectCallBtn.addEventListener("click", rejectCall);
+  // ---- Полноэкранный режим + зум/сдвиг (пальцы, колесо, двойной клик, кнопки) ----
+  // iPhone не умеет fullscreen для div – тогда «псевдо-fullscreen» классом .fs-fake.
+  function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+  function setupZoom(wrap) {
+    const video = wrap.querySelector("video");
+    if (!video) return null;
+    let s = 1, tx = 0, ty = 0;
+    const pts = new Map();
+    let pinch0 = null, pan0 = null, lastTap = 0;
+    const bar = document.createElement("div");
+    bar.className = "zoom-bar";
+    bar.innerHTML = '<button type="button" data-z="out">−</button><span class="zoom-val">100%</span><button type="button" data-z="in">+</button><button type="button" data-z="reset">1:1</button>';
+    wrap.appendChild(bar);
+    const val = bar.querySelector(".zoom-val");
+    function apply() {
+      const w = wrap.clientWidth, h = wrap.clientHeight;
+      s = Math.min(8, Math.max(1, s));
+      tx = Math.min(0, Math.max(w - w * s, tx));
+      ty = Math.min(0, Math.max(h - h * s, ty));
+      if (s === 1) { tx = 0; ty = 0; }
+      video.style.transform = s === 1 ? "" : "translate(" + tx + "px," + ty + "px) scale(" + s + ")";
+      val.textContent = Math.round(s * 100) + "%";
+      wrap.classList.toggle("zoomed", s > 1);
+    }
+    function zoomAt(ns, px, py) {
+      ns = Math.min(8, Math.max(1, ns));
+      tx = px - (px - tx) * (ns / s); ty = py - (py - ty) * (ns / s); s = ns; apply();
+    }
+    function local(e) { const r = wrap.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+    function active() { return wrap.classList.contains("zoom-on"); }
+    bar.addEventListener("click", function (e) {
+      const b = e.target.closest("button"); if (!b) return;
+      e.stopPropagation();
+      const cx = wrap.clientWidth / 2, cy = wrap.clientHeight / 2;
+      if (b.dataset.z === "in") zoomAt(s * 1.5, cx, cy);
+      else if (b.dataset.z === "out") zoomAt(s / 1.5, cx, cy);
+      else { s = 1; apply(); }
+    });
+    wrap.addEventListener("wheel", function (e) {
+      if (!active()) return;
+      e.preventDefault();
+      const [x, y] = local(e);
+      zoomAt(s * Math.exp(-e.deltaY * 0.0015), x, y);
+    }, { passive: false });
+    wrap.addEventListener("dblclick", function (e) {
+      if (!active() || e.target.closest("button")) return;
+      const [x, y] = local(e);
+      if (s > 1) { s = 1; apply(); } else zoomAt(2.5, x, y);
+    });
+    wrap.addEventListener("pointerdown", function (e) {
+      if (!active() || e.target.closest("button")) return;
+      pts.set(e.pointerId, local(e));
+      try { wrap.setPointerCapture(e.pointerId); } catch (_) {}
+      if (pts.size === 2) {
+        const [a, b] = Array.from(pts.values());
+        pinch0 = { d: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, s: s, tx: tx, ty: ty, mx: (a[0] + b[0]) / 2, my: (a[1] + b[1]) / 2 };
+        pan0 = null;
+      } else if (pts.size === 1) {
+        pan0 = { x: e.clientX, y: e.clientY, tx: tx, ty: ty };
+        // двойной тап на телефоне (dblclick там не приходит)
+        const now = Date.now();
+        if (e.pointerType === "touch" && now - lastTap < 300) {
+          const [x, y] = local(e);
+          if (s > 1) { s = 1; apply(); } else zoomAt(2.5, x, y);
+          lastTap = 0;
+        } else lastTap = now;
+      }
+    });
+    wrap.addEventListener("pointermove", function (e) {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, local(e));
+      if (pts.size >= 2 && pinch0) {
+        const [a, b] = Array.from(pts.values());
+        const d = Math.hypot(a[0] - b[0], a[1] - b[1]) || 1;
+        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+        const ns = Math.min(8, Math.max(1, pinch0.s * d / pinch0.d));
+        // точка под центром пальцев остаётся под ними (и двигается вместе с ними)
+        tx = mx - (pinch0.mx - pinch0.tx) * (ns / pinch0.s);
+        ty = my - (pinch0.my - pinch0.ty) * (ns / pinch0.s);
+        s = ns; apply();
+      } else if (pan0 && s > 1) {
+        tx = pan0.tx + (e.clientX - pan0.x); ty = pan0.ty + (e.clientY - pan0.y); apply();
+      }
+    });
+    function up(e) {
+      pts.delete(e.pointerId);
+      if (pts.size < 2) pinch0 = null;
+      if (pts.size === 1) { const p = Array.from(pts.values())[0]; const r = wrap.getBoundingClientRect(); pan0 = { x: p[0] + r.left, y: p[1] + r.top, tx: tx, ty: ty }; }
+      if (pts.size === 0) pan0 = null;
+    }
+    wrap.addEventListener("pointerup", up);
+    wrap.addEventListener("pointercancel", up);
+    window.addEventListener("resize", apply);
+    return { reset: function () { s = 1; pts.clear(); pinch0 = pan0 = null; apply(); } };
+  }
+  const zoomers = {};
+  function syncZoomMode() {
+    document.querySelectorAll(".video-wrap").forEach(function (w) {
+      const on = fsElement() === w || w.classList.contains("fs-fake");
+      w.classList.toggle("zoom-on", on);
+      if (!on && zoomers[w.id]) zoomers[w.id].reset();
+    });
+  }
+  document.querySelectorAll(".video-wrap").forEach(function (w) { if (w.id) zoomers[w.id] = setupZoom(w); });
+  document.addEventListener("fullscreenchange", syncZoomMode);
+  document.addEventListener("webkitfullscreenchange", syncZoomMode);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") document.querySelectorAll(".video-wrap.fs-fake").forEach(function (w) { w.classList.remove("fs-fake"); syncZoomMode(); });
+  });
+  function toggleFakeFs(wrap) {
+    wrap.classList.toggle("fs-fake");
+    document.body.classList.toggle("fs-fake-open", !!document.querySelector(".fs-fake"));
+    syncZoomMode();
+  }
   document.querySelectorAll("[data-fs]").forEach(function (btn) {
     btn.addEventListener("click", function () {
       const wrap = $(btn.getAttribute("data-fs"));
       if (!wrap) return;
-      if (document.fullscreenElement === wrap) document.exitFullscreen().catch(function () {});
-      else if (wrap.requestFullscreen) wrap.requestFullscreen().catch(function (e) { setStatus(t.fsErr + e.message, "err"); });
+      if (wrap.classList.contains("fs-fake")) return toggleFakeFs(wrap);
+      if (fsElement() === wrap) {
+        (document.exitFullscreen ? document.exitFullscreen() : Promise.resolve(document.webkitExitFullscreen && document.webkitExitFullscreen())).catch(function () {});
+        return;
+      }
+      if (wrap.requestFullscreen) wrap.requestFullscreen().catch(function () { toggleFakeFs(wrap); });
       else if (wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
+      else toggleFakeFs(wrap);
     });
   });
   if (el.langSelect) {

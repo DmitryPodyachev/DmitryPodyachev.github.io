@@ -1,4 +1,4 @@
-const CACHE = "vcall-v8-4";
+const CACHE = "vcall-v8-5";
 const ASSETS = ["./", "./index.html", "./style.css", "./locales.js", "./app.js", "./manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
