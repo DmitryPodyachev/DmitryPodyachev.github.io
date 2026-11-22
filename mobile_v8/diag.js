@@ -2,36 +2,36 @@
 // app.js вызывает: VCDiag.init(getState), VCDiag.set(key, status, msg), VCDiag.event(type, detail), VCDiag.watchCall(call, onFail).
 (function () {
   "use strict";
-  let PRESENCE = "https://vc.goldberg.pp.ua";
+  let PRESENCE = "https://static.137.100.245.188.clients.your-server.de/zoom";   // nginx-прокси на vc.goldberg.pp.ua (Cloudflare из России работает плохо)
   try { PRESENCE = localStorage.getItem("vc_presence") || PRESENCE; } catch (_) {}   // для тестов
   const PING_MS = 45000;
   const TX = {
-    ru: { title: "Диагностика", lib: "Библиотека PeerJS", signal: "Сервер сигнализации", stun: "STUN / UDP (внешний адрес)", media: "Камера / микрофон", presence: "Сервер присутствия",
+    ru: { turn: "TURN (ретранслятор)", turnOk: "работает – звонок пройдёт даже при заблокированном UDP", turnNone: "не настроен", turnFail: "не отвечает: ", title: "Диагностика", lib: "Библиотека PeerJS", signal: "Сервер сигнализации", stun: "STUN / UDP (внешний адрес)", media: "Камера / микрофон", presence: "Сервер присутствия",
       wait: "проверка…", ok: "OK", libFail: "не загрузилась (unpkg.com заблокирован?) – звонки невозможны", sigFail: "нет связи с 0.peerjs.com – звонки невозможны (блокировка/сеть)",
       stunOk: "внешний адрес получен", stunFail: "внешний адрес не получен: UDP/STUN заблокирован – прямой звонок вероятно не соединится, нужен TURN",
       stunRelay: "только через ретранслятор", iceFail: "Соединение не удалось: прямой канал заблокирован (UDP/NAT). Нужен TURN-сервер.",
       timeout: "Нет соединения за 25 с. ICE: ", presFail: "недоступен (админ-страница не увидит вас; звонку не мешает)", rerun: "Проверить снова", close: "Закрыть",
       hint: "Если «STUN / UDP» красный – провайдер режет WebRTC (часто в России, в корпоративных сетях). Попробуйте мобильный интернет или VPN." },
-    ua: { title: "Діагностика", lib: "Бібліотека PeerJS", signal: "Сервер сигналізації", stun: "STUN / UDP (зовнішня адреса)", media: "Камера / мікрофон", presence: "Сервер присутності",
+    ua: { turn: "TURN (ретранслятор)", turnOk: "працює – дзвінок пройде навіть із заблокованим UDP", turnNone: "не налаштовано", turnFail: "не відповідає: ", title: "Діагностика", lib: "Бібліотека PeerJS", signal: "Сервер сигналізації", stun: "STUN / UDP (зовнішня адреса)", media: "Камера / мікрофон", presence: "Сервер присутності",
       wait: "перевірка…", ok: "OK", libFail: "не завантажилась (unpkg.com заблоковано?) – дзвінки неможливі", sigFail: "немає зв'язку з 0.peerjs.com – дзвінки неможливі",
       stunOk: "зовнішню адресу отримано", stunFail: "зовнішню адресу не отримано: UDP/STUN заблоковано – потрібен TURN",
       stunRelay: "лише через ретранслятор", iceFail: "З'єднання не вдалося: прямий канал заблоковано (UDP/NAT). Потрібен TURN-сервер.",
       timeout: "Немає з'єднання за 25 с. ICE: ", presFail: "недоступний (дзвінку не заважає)", rerun: "Перевірити знову", close: "Закрити",
       hint: "Якщо «STUN / UDP» червоний – провайдер ріже WebRTC. Спробуйте мобільний інтернет або VPN." },
-    en: { title: "Diagnostics", lib: "PeerJS library", signal: "Signalling server", stun: "STUN / UDP (public address)", media: "Camera / microphone", presence: "Presence server",
+    en: { turn: "TURN (relay)", turnOk: "works – calls connect even if UDP is blocked", turnNone: "not configured", turnFail: "no answer: ", title: "Diagnostics", lib: "PeerJS library", signal: "Signalling server", stun: "STUN / UDP (public address)", media: "Camera / microphone", presence: "Presence server",
       wait: "checking…", ok: "OK", libFail: "not loaded (unpkg.com blocked?) – calls impossible", sigFail: "no connection to 0.peerjs.com – calls impossible (blocked/network)",
       stunOk: "public address found", stunFail: "no public address: UDP/STUN blocked – a direct call will likely fail, TURN needed",
       stunRelay: "relay only", iceFail: "Connection failed: direct path blocked (UDP/NAT). A TURN server is needed.",
       timeout: "No connection after 25 s. ICE: ", presFail: "unreachable (admin page won't see you; the call is not affected)", rerun: "Check again", close: "Close",
       hint: "If “STUN / UDP” is red, the network blocks WebRTC (common in Russia and corporate networks). Try mobile data or a VPN." },
-    de: { title: "Diagnose", lib: "PeerJS-Bibliothek", signal: "Signalisierungsserver", stun: "STUN / UDP (öffentliche Adresse)", media: "Kamera / Mikrofon", presence: "Präsenzserver",
+    de: { turn: "TURN (Relay)", turnOk: "funktioniert – Anrufe klappen auch bei blockiertem UDP", turnNone: "nicht konfiguriert", turnFail: "keine Antwort: ", title: "Diagnose", lib: "PeerJS-Bibliothek", signal: "Signalisierungsserver", stun: "STUN / UDP (öffentliche Adresse)", media: "Kamera / Mikrofon", presence: "Präsenzserver",
       wait: "prüfe…", ok: "OK", libFail: "nicht geladen (unpkg.com blockiert?) – keine Anrufe möglich", sigFail: "keine Verbindung zu 0.peerjs.com – keine Anrufe möglich",
       stunOk: "öffentliche Adresse gefunden", stunFail: "keine öffentliche Adresse: UDP/STUN blockiert – TURN nötig",
       stunRelay: "nur über Relay", iceFail: "Verbindung fehlgeschlagen: direkter Weg blockiert (UDP/NAT). TURN-Server nötig.",
       timeout: "Keine Verbindung nach 25 s. ICE: ", presFail: "nicht erreichbar (Anruf nicht betroffen)", rerun: "Erneut prüfen", close: "Schließen",
       hint: "Ist „STUN / UDP“ rot, blockiert das Netz WebRTC. Mobile Daten oder VPN versuchen." }
   };
-  const KEYS = ["lib", "signal", "stun", "media", "presence"];
+  const KEYS = ["lib", "signal", "stun", "turn", "media", "presence"];
   const diag = {};
   let getState = function () { return {}; };
   let pingTimer = null;
@@ -104,6 +104,24 @@
     pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).catch(function (e) { set("stun", "fail", e.message); done = true; });
     setTimeout(finish, 6000);
   }
+  // TURN: получаем ли relay-кандидата через наш ретранслятор (с временным паролем от /zoom/turn)
+  function testTurn(iceServers) {
+    const turns = (iceServers || []).filter(function (x) { return [].concat(x.urls).some(function (u) { return /^turns?:/.test(u); }); });
+    if (!turns.length) { set("turn", "warn", tx().turnNone); return; }
+    set("turn", "wait", tx().wait);
+    let pc, done = false, err = "";
+    try { pc = new RTCPeerConnection({ iceServers: turns, iceTransportPolicy: "relay" }); } catch (e) { set("turn", "fail", e.message); return; }
+    const finish = function (ok) {
+      if (done) return; done = true;
+      try { pc.close(); } catch (_) {}
+      if (ok) set("turn", "ok", tx().turnOk); else set("turn", "fail", tx().turnFail + (err || "timeout"));
+    };
+    pc.onicecandidate = function (e) { if (e.candidate && / typ relay/.test(e.candidate.candidate)) finish(true); else if (!e.candidate) finish(false); };
+    pc.onicecandidateerror = function (e) { err = (e.errorCode || "") + " " + (e.errorText || ""); };
+    pc.createDataChannel("t");
+    pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).catch(function (e) { err = e.message; finish(false); });
+    setTimeout(function () { finish(false); }, 6000);
+  }
   function testPresence() {
     fetch(PRESENCE + "/api/hello", { cache: "no-store", mode: "cors" })
       .then(function (r) { return r.json(); })
@@ -171,6 +189,7 @@
   function runAll() {
     set("lib", typeof window.Peer === "function" ? "ok" : "fail", typeof window.Peer === "function" ? tx().ok : tx().libFail);
     testStun(iceCfg);
+    testTurn(iceCfg);
     testPresence();
   }
   function init(getter, iceServers) {
@@ -182,5 +201,5 @@
     document.addEventListener("visibilitychange", function () { if (!document.hidden) ping(); });
     window.addEventListener("pagehide", function () { const st = getState(); if (st.code) post("/api/event", { code: st.code, type: "offline", detail: "page closed" }); });
   }
-  window.VCDiag = { init: init, set: set, event: event, ping: ping, watchCall: watchCall, open: open, TX: TX };
+  window.VCDiag = { testTurn: function (s) { if (s) iceCfg = s; testTurn(iceCfg); }, init: init, set: set, event: event, ping: ping, watchCall: watchCall, open: open, TX: TX };
 })();

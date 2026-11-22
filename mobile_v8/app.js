@@ -97,7 +97,9 @@
         return {
           country_code: (d.country_code || d.country || "").toString().slice(0, 2),
           country_name: d.country_name || d.country || "",
-          city: d.city || "", ip: d.ip || ""
+          city: d.city || "", ip: d.ip || "",
+          org: d.org || (d.connection && (d.connection.org || d.connection.isp)) || "",
+          asn: String(d.asn || (d.connection && d.connection.asn) || "").replace(/^AS/i, "")
         };
       } catch (_) {}
     }
@@ -318,13 +320,37 @@
   // недостающие дорожки заменяем заглушками (картинка «камера выкл.», тишина), чат и показ экрана работают.
   let mediaNote = "", mediaInfo = "";
   const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }];
+  // Сигнализация: свой сервер (доступен из России; 0.peerjs.com отвечает российским IP 403), запасной – 0.peerjs.com.
+  // Для тестов: localStorage vc_signal_host = "127.0.0.1:8833:http" | "cloud".
+  const OWN_SIGNAL = (function () {
+    let h = "static.137.100.245.188.clients.your-server.de:443:https";
+    try { h = localStorage.getItem("vc_signal_host") || h; } catch (_) {}
+    if (h === "cloud") return null;
+    const p = h.split(":");
+    return { host: p[0], port: Number(p[1] || 443), secure: (p[2] || "https") === "https", path: "/zoom/peerjs/",
+      base: ((p[2] || "https") + "://" + p[0] + (p[1] && p[1] !== "443" ? ":" + p[1] : "")) };
+  })();
+  let signalMode = OWN_SIGNAL ? "own" : "cloud", signalEverOpen = false;
+  function signalName() { return signalMode === "own" ? OWN_SIGNAL.host + OWN_SIGNAL.path : "0.peerjs.com"; }
+  async function loadTurn() {
+    if (!OWN_SIGNAL) return;
+    try {
+      const ctrl = new AbortController(); const tm = setTimeout(function () { ctrl.abort(); }, 4000);
+      const r = await fetch(OWN_SIGNAL.base + "/zoom/turn", { signal: ctrl.signal, cache: "no-store" });
+      clearTimeout(tm);
+      const j = await r.json();
+      (j.iceServers || []).forEach(function (s) { ICE_SERVERS.push(s); });
+    } catch (_) {}
+    if (window.VCDiag && window.VCDiag.testTurn) window.VCDiag.testTurn(ICE_SERVERS);
+  }
   const D = window.VCDiag || { init: function () {}, set: function () {}, event: function () {}, ping: function () {}, watchCall: function () {} };
   function diagState() {
     const id = peer && peer.open ? peer.id : "";
     return {
       code: fromPeerId(id), room: roomCode || "", role: id && roomCode && id === toPeerId(roomCode) ? "host" : (id ? "guest" : ""),
       state: currentCall ? "incall" : (id ? "idle" : "offline"), peerWith: currentCall ? fromPeerId(currentCall.peer) : "",
-      lang: lang, media: mediaInfo
+      lang: lang, media: mediaInfo, signal: signalMode,
+      geo: myGeo ? { country: myGeo.country_code || "", city: myGeo.city || "", org: myGeo.org || "", asn: myGeo.asn || "" } : null
     };
   }
   let placeholderTimer = null;
@@ -790,6 +816,7 @@
   }
   function makePeer(id) {
     const opts = { debug: 1, config: { iceServers: ICE_SERVERS } };
+    if (signalMode === "own") Object.assign(opts, { host: OWN_SIGNAL.host, port: OWN_SIGNAL.port, path: OWN_SIGNAL.path, secure: OWN_SIGNAL.secure, key: "peerjs" });
     return id ? new Peer(id, opts) : new Peer(opts);
   }
   // Ссылка ?room=<код>: кто первый занял код – хост (ждёт звонка), второй – гость и звонит хосту сам.
@@ -815,16 +842,29 @@
       wantHost = toPeerId(roomCode);
       if (!fromUrl || qs.get("call")) history.replaceState(null, "", location.pathname + "?room=" + roomCode + location.hash);
     }
+    await loadTurn();
     connectPeer(wantHost, callTo, 0);
+  }
+  function fallbackToCloud(wantId, callTo, why) {
+    if (signalMode !== "own" || signalEverOpen) return false;
+    D.event("signal-fallback", signalName() + " – " + why);
+    try { peer.destroy(); } catch (_) {}
+    signalMode = "cloud";
+    connectPeer(wantId, callTo, 0);
+    return true;
   }
   function connectPeer(wantId, callTo, attempt) {
     peer = makePeer(wantId);
+    const thisPeer = peer;
     const sigTimer = setTimeout(function () {
-      if (!peer.open) D.set("signal", "fail", "timeout 15 s – 0.peerjs.com");
-    }, 15000);
+      if (peer !== thisPeer || peer.open) return;
+      if (fallbackToCloud(wantId, callTo, "timeout 10 s")) return;
+      D.set("signal", "fail", "timeout – " + signalName());
+    }, signalMode === "own" ? 10000 : 15000);
     peer.on("open", function (id) {
       clearTimeout(sigTimer);
-      D.set("signal", "ok", "0.peerjs.com");
+      signalEverOpen = true;
+      D.set("signal", "ok", signalName());
       D.ping();
       el.myId.textContent = fromPeerId(id);
       if (!callTo) sessionStorage.setItem("vc_host", id);
@@ -855,6 +895,10 @@
         if (!mine) { mine = newCode(); localStorage.setItem("vc_myCode", mine); }
         const guestId = toPeerId(mine) === wantId ? null : toPeerId(mine);
         return connectPeer(guestId, wantId, 0);
+      }
+      if (err && /network|server-error|socket-error|socket-closed/.test(err.type || "") && peer === thisPeer) {
+        clearTimeout(sigTimer);
+        if (fallbackToCloud(wantId, callTo, err.type)) return;
       }
       setStatus(t.peerErr + (err.type || err.message || err), "err");
       if (err && /network|server-error|socket-error|socket-closed|browser-incompatible/.test(err.type || "")) D.set("signal", "fail", (err.type || "") + ": " + (err.message || ""));

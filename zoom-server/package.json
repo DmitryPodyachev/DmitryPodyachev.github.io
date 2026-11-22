@@ -1,0 +1,8 @@
+{
+  "name": "zoom-signal",
+  "private": true,
+  "description": "PeerJS signalling server + TURN credentials for the video call app under /zoom",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "express": "4.21.2", "peer": "1.0.2" }
+}

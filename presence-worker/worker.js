@@ -46,7 +46,12 @@ export default {
       const text = await req.text();
       if (text.length > 8000) return json({ error: "too big" }, 413, c);
       let body; try { body = JSON.parse(text); } catch (_) { return json({ error: "bad json" }, 400, c); }
-      const net = { country: req.cf?.country || "", city: req.cf?.city || "", asn: req.cf?.asn || "", org: req.cf?.asOrganization || "" };
+      let net = { country: req.cf?.country || "", city: req.cf?.city || "", asn: req.cf?.asn || "", org: req.cf?.asOrganization || "" };
+      // через nginx-прокси (/zoom/api) Cloudflare видит IP сервера, а не клиента – берём гео, которое прислал клиент
+      if (req.headers.get("X-Zoom-Proxy") === "1") {
+        const g = (body && body.geo) || {};
+        net = { country: str(g.country, 2).toUpperCase(), city: str(g.city, 60), asn: str(g.asn, 12), org: str(g.org, 80), via: "proxy" };
+      }
       const r = await hub.fetch("https://hub" + url.pathname, { method: "POST", body: JSON.stringify({ body, net }) });
       return json(await r.json(), r.status, c);
     }
@@ -91,7 +96,7 @@ export class Hub {
       this.peers[code] = {
         code, firstSeen: prev.firstSeen, lastSeen: now,
         room: str(body.room, 40), role: str(body.role, 10), name: str(body.name, 40),
-        state: str(body.state, 20), peerWith: str(body.peerWith, 40), ice: str(body.ice, 20),
+        state: str(body.state, 20), signal: str(body.signal, 10), peerWith: str(body.peerWith, 40), ice: str(body.ice, 20),
         lang: str(body.lang, 5), device: str(body.device, 80), standalone: !!body.standalone,
         media: str(body.media, 40), diag: (body.diag && typeof body.diag === "object") ? JSON.parse(JSON.stringify(body.diag).slice(0, 3000) || "{}") : prev.diag || null,
         net
@@ -142,7 +147,7 @@ const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",
 const ago=ms=>{const s=Math.round(ms/1000);return s<60?s+" с":s<3600?Math.round(s/60)+" мин":Math.round(s/3600)+" ч"};
 const flag=c=>c&&c.length===2?String.fromCodePoint(...[...c.toUpperCase()].map(x=>127397+x.charCodeAt(0))):"";
 const cls=v=>v===true||v==="ok"?"ok":v==="warn"?"warn":v===false||v==="fail"||v==="err"?"err":"mut";
-function diag(d){if(!d)return '<span class="mut">—</span>';const L={lib:"PeerJS",signal:"сигнализация",stun:"STUN/UDP",media:"камера/мик",presence:"сервер"};
+function diag(d){if(!d)return '<span class="mut">—</span>';const L={lib:"PeerJS",signal:"сигнализация",stun:"STUN/UDP",turn:"TURN",media:"камера/мик",presence:"сервер"};
  return Object.keys(L).filter(k=>d[k]).map(k=>'<span class="'+cls(d[k].s)+'">'+L[k]+': '+esc(d[k].m||d[k].s)+'</span>').join("<br>")}
 // /admin -> /api/peers (пароль), /admin2 -> /api/peers2; за прокси (nginx /zoom/admin2) – относительно префикса
 const P=location.pathname.replace(/[/]+$/,"");const BASE=P.replace(/[/]admin2?$/,"");const OPEN=/admin2$/.test(P);
@@ -152,7 +157,7 @@ async function load(){
   document.getElementById("sum").textContent="Онлайн: "+on+" · всего за 24 ч: "+j.peers.length;
   document.getElementById("tb").innerHTML=ps.map(p=>{const n=p.net||{};const st=p.state==="incall"?'<span class="ok">в звонке</span>'+(p.peerWith?' с <code>'+esc(p.peerWith)+'</code>':''):esc(p.state||"");
    return '<tr><td><span class="dot '+(p.online?"on":"off")+'"></span><code>'+esc(p.code)+'</code>'+(p.name?'<div class="mut">'+esc(p.name)+'</div>':'')+(p.room&&p.room!==p.code?'<div class="mut d">комната '+esc(p.room)+' ('+esc(p.role)+')</div>':'')+'</td>'
-   +'<td>'+st+(p.ice?'<div class="d '+(p.ice==="failed"?"err":"mut")+'">ICE: '+esc(p.ice)+'</div>':'')+'<div class="mut d">'+ago(j.now-p.lastSeen)+' назад</div></td>'
+   +'<td>'+st+(p.ice?'<div class="d '+(p.ice==="failed"?"err":"mut")+'">ICE: '+esc(p.ice)+'</div>':'')+(p.signal?'<div class="mut d">сигнал: '+esc(p.signal==="own"?"свой сервер":p.signal==="cloud"?"0.peerjs.com":p.signal)+'</div>':'')+'<div class="mut d">'+ago(j.now-p.lastSeen)+' назад</div></td>'
    +'<td>'+flag(n.country)+' '+esc(n.country)+' '+esc(n.city)+'<div class="mut d">'+esc(n.org)+(n.asn?' AS'+esc(n.asn):'')+'</div></td>'
    +'<td class="hide-m d">'+esc(p.device)+(p.standalone?' · PWA':'')+'<div class="mut">'+esc(p.lang)+' · media: '+esc(p.media)+'</div></td>'
    +'<td class="d">'+diag(p.diag)+'</td>'

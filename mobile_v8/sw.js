@@ -1,5 +1,5 @@
-const CACHE = "vcall-v8-6";
-const ASSETS = ["./", "./index.html", "./style.css", "./locales.js", "./diag.js", "./app.js", "./manifest.webmanifest"];
+const CACHE = "vcall-v8-7";
+const ASSETS = ["./", "./index.html", "./style.css", "./locales.js", "./peerjs.min.js", "./diag.js", "./app.js", "./manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));

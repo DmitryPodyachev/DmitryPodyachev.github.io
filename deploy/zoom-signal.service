@@ -1,0 +1,19 @@
+[Unit]
+Description=zoom-signal (PeerJS signalling + TURN credentials for /zoom)
+After=network.target
+
+[Service]
+User=zoomsig
+Group=zoomsig
+WorkingDirectory=/opt/zoom-signal
+EnvironmentFile=/etc/zoom-signal.env
+ExecStart=/usr/bin/node /opt/zoom-signal/server.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
