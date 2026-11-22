@@ -3,10 +3,12 @@
 // POST /api/event  – client event (call failed, ICE failed, peer error …)
 // GET  /api/hello  – reachability check for client diagnostics
 // GET  /admin, /api/peers – admin page / JSON (Basic Auth, secret ADMIN_USERS "login:pass" per line)
+// GET  /admin2, /api/peers2 – the same WITHOUT password (owner's request, for tests; remove when not needed)
 // All state lives in one Durable Object "Hub" (SQLite-backed, free plan).
 
 const APP_URL = "https://dmitrypodyachev.github.io/mobile_v8/";
-const ORIGINS = ["https://dmitrypodyachev.github.io", "http://127.0.0.1:8822", "http://localhost:8822"];
+const ORIGINS = ["https://dmitrypodyachev.github.io", "http://127.0.0.1:8822", "http://localhost:8822",
+  "https://static.137.100.245.188.clients.your-server.de", "http://static.137.100.245.188.clients.your-server.de"];
 const ONLINE_MS = 120 * 1000;        // online if last ping < 2 min
 const KEEP_MS = 24 * 3600 * 1000;    // forget peers after 24 h
 const MAX_EVENTS = 300;
@@ -48,6 +50,9 @@ export default {
       const r = await hub.fetch("https://hub" + url.pathname, { method: "POST", body: JSON.stringify({ body, net }) });
       return json(await r.json(), r.status, c);
     }
+    if (url.pathname === "/api/peers2") return hub.fetch("https://hub/list");
+    if (url.pathname === "/admin2" || url.pathname === "/admin2/")
+      return new Response(ADMIN_HTML, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } });
     if (url.pathname === "/api/peers" || url.pathname === "/admin" || url.pathname === "/admin/") {
       if (!authed(req, env)) return deny();
       if (url.pathname === "/api/peers") return hub.fetch("https://hub/list");
@@ -139,8 +144,10 @@ const flag=c=>c&&c.length===2?String.fromCodePoint(...[...c.toUpperCase()].map(x
 const cls=v=>v===true||v==="ok"?"ok":v==="warn"?"warn":v===false||v==="fail"||v==="err"?"err":"mut";
 function diag(d){if(!d)return '<span class="mut">—</span>';const L={lib:"PeerJS",signal:"сигнализация",stun:"STUN/UDP",media:"камера/мик",presence:"сервер"};
  return Object.keys(L).filter(k=>d[k]).map(k=>'<span class="'+cls(d[k].s)+'">'+L[k]+': '+esc(d[k].m||d[k].s)+'</span>').join("<br>")}
+// /admin -> /api/peers (пароль), /admin2 -> /api/peers2; за прокси (nginx /zoom/admin2) – относительно префикса
+const P=location.pathname.replace(/[/]+$/,"");const BASE=P.replace(/[/]admin2?$/,"");const OPEN=/admin2$/.test(P);
 async function load(){
- try{const r=await fetch("/api/peers",{cache:"no-store"});const j=await r.json();const all=document.getElementById("all").checked;
+ try{const r=await fetch(BASE+(OPEN?"/api/peers2":"/api/peers"),{cache:"no-store"});const j=await r.json();if(BASE)j.app=location.origin+BASE+"/";const all=document.getElementById("all").checked;
   const ps=j.peers.filter(p=>all||p.online);const on=j.peers.filter(p=>p.online).length;
   document.getElementById("sum").textContent="Онлайн: "+on+" · всего за 24 ч: "+j.peers.length;
   document.getElementById("tb").innerHTML=ps.map(p=>{const n=p.net||{};const st=p.state==="incall"?'<span class="ok">в звонке</span>'+(p.peerWith?' с <code>'+esc(p.peerWith)+'</code>':''):esc(p.state||"");
