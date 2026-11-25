@@ -3,7 +3,7 @@
 //                       (0.peerjs.com answers 403 to Russian IPs).
 //   /zoom/turn        – short-lived TURN credentials for coturn (use-auth-secret / REST API scheme),
 //                       so the TURN password is never in the public JS.
-// Env: PORT (9000), TURN_SECRET (same as static-auth-secret in turnserver.conf), TURN_HOST (public host name),
+// Env: BIND (127.0.0.1; 0.0.0.0 in docker), PORT (9000), TURN_SECRET (same as static-auth-secret in turnserver.conf), TURN_HOST (public host name),
 //      ORIGINS (comma separated, allowed for CORS on /zoom/turn).
 "use strict";
 const crypto = require("crypto");
@@ -15,6 +15,7 @@ const TURN_SECRET = process.env.TURN_SECRET || "";
 const TURN_HOST = process.env.TURN_HOST || "";
 const ORIGINS = (process.env.ORIGINS || "https://dmitrypodyachev.github.io").split(",").map((s) => s.trim()).filter(Boolean);
 const TTL = 12 * 3600;
+const BIND = process.env.BIND || "127.0.0.1";   // 0.0.0.0 inside docker
 
 const app = express();
 app.disable("x-powered-by");
@@ -35,5 +36,5 @@ app.get("/zoom/turn", (req, res) => {
 });
 app.get("/zoom/signal-health", (req, res) => res.json({ ok: true, t: Date.now() }));
 
-const server = app.listen(PORT, "127.0.0.1", () => console.log("zoom-signal on 127.0.0.1:" + PORT));
+const server = app.listen(PORT, BIND, () => console.log("zoom-signal on " + BIND + ":" + PORT));
 app.use("/zoom/peerjs", ExpressPeerServer(server, { path: "/", proxied: true, allow_discovery: false, alive_timeout: 60000 }));
